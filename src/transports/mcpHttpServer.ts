@@ -382,15 +382,22 @@ export class MCPHttpServer<
             }
         );
 
+        const resourceServerUrl = new URL("/mcp", issuerUrl);
+        const resourceMetadataUrl = new URL(
+            `/.well-known/oauth-protected-resource${resourceServerUrl.pathname}`,
+            issuerUrl
+        ).href;
+
         this.app.use(
             mcpAuthRouter({
                 provider,
                 issuerUrl,
+                resourceServerUrl,
                 scopesSupported: ["mcp:tools"],
             })
         );
 
-        return requireBearerAuth({ verifier: provider });
+        return requireBearerAuth({ verifier: provider, resourceMetadataUrl });
     }
 
     // eslint-disable-next-line @typescript-eslint/require-await
