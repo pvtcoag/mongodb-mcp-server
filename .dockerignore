@@ -3,9 +3,10 @@ node_modules
 .vscode
 .github
 .git
-# Environment variables
 .env
+.env.*
+*.log
+.DS_Store
 
 tests
 coverage
-scripts
