@@ -1,5 +1,6 @@
 import { type StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import crypto from "crypto";
 import express from "express";
 import { LogId } from "../common/logging/loggingDefinitions.js";
 import { getRandomUUID } from "../helpers/getRandomUUID.js";
@@ -303,7 +304,111 @@ export class MCPHttpServer<
         return sessionId;
     }
 
+    private constantTimeEqual(a: string, b: string): boolean {
+        const aBuf = Buffer.from(a);
+        const bBuf = Buffer.from(b);
+        if (aBuf.length !== bBuf.length) {
+            // Still run a comparison against same-length buffer to avoid length-based timing leak
+            crypto.timingSafeEqual(aBuf, aBuf);
+            return false;
+        }
+        return crypto.timingSafeEqual(aBuf, bBuf);
+    }
+
+    private setupCorsMiddleware(): void {
+        const allowed = this.userConfig.httpAllowedOrigins;
+        if (!allowed || allowed.length === 0) return;
+
+        const allowedSet = new Set(allowed);
+        this.app.use((req, res, next) => {
+            const origin = req.headers.origin;
+            if (origin && allowedSet.has(origin)) {
+                res.setHeader("Access-Control-Allow-Origin", origin);
+                res.setHeader("Vary", "Origin");
+                res.setHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+                res.setHeader(
+                    "Access-Control-Allow-Headers",
+                    "Content-Type, Accept, Authorization, mcp-session-id"
+                );
+                res.setHeader("Access-Control-Max-Age", "600");
+            } else if (origin) {
+                res.status(403).json({ error: "Origin not allowed" });
+                return;
+            }
+            if (req.method === "OPTIONS") {
+                res.status(204).end();
+                return;
+            }
+            next();
+        });
+    }
+
+    private setupRateLimitMiddleware(): void {
+        const limit = this.userConfig.httpRateLimitPerMinute;
+        if (!limit || limit <= 0) return;
+
+        const buckets = new Map<string, { count: number; resetAt: number }>();
+        const WINDOW_MS = 60_000;
+
+        this.app.use((req, res, next) => {
+            const ip = req.ip || req.socket.remoteAddress || "unknown";
+            const now = Date.now();
+            const bucket = buckets.get(ip);
+
+            if (!bucket || bucket.resetAt <= now) {
+                buckets.set(ip, { count: 1, resetAt: now + WINDOW_MS });
+            } else {
+                bucket.count++;
+                if (bucket.count > limit) {
+                    const retryAfter = Math.ceil((bucket.resetAt - now) / 1000);
+                    res.setHeader("Retry-After", String(retryAfter));
+                    res.status(429).json({ error: "Rate limit exceeded" });
+                    return;
+                }
+            }
+
+            // Opportunistic cleanup to prevent memory growth
+            if (buckets.size > 10_000) {
+                for (const [key, val] of buckets) {
+                    if (val.resetAt <= now) buckets.delete(key);
+                }
+            }
+            next();
+        });
+    }
+
+    private setupUrlAuthMiddleware(): void {
+        const token = this.userConfig.urlAuthToken;
+        if (!token) return;
+
+        this.app.use((req, res, next) => {
+            // Expected shape: /mcp/<token> (optionally followed by query string)
+            const match = req.url.match(/^\/mcp\/([^/?]+)(.*)$/);
+            if (!match) {
+                res.status(404).json({ error: "Not found" });
+                return;
+            }
+            const [, providedToken, rest] = match;
+            if (!this.constantTimeEqual(providedToken, token)) {
+                this.logger.warning({
+                    id: LogId.streamableHttpTransportRequestFailure,
+                    context: "urlAuth",
+                    message: `Rejected URL auth attempt from ${req.ip || "unknown"}`,
+                });
+                res.status(403).json({ error: "Invalid token" });
+                return;
+            }
+            // Rewrite so downstream /mcp routes match
+            req.url = "/mcp" + rest;
+            next();
+        });
+    }
+
     protected setupMiddlewares(): void {
+        this.setupCorsMiddleware();
+        this.setupRateLimitMiddleware();
+        this.setupUrlAuthMiddleware();
+
         this.app.use(express.json({ limit: this.userConfig.httpBodyLimit }));
         this.app.use((req, res, next) => {
             for (const [key, value] of Object.entries(this.userConfig.httpHeaders)) {
