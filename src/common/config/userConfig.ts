@@ -141,6 +141,40 @@ const ServerConfigSchema = z.object({
             "Header that the HTTP server will validate when making requests (only used when transport is 'http')."
         )
         .register(configRegistry, { overrideBehavior: "not-allowed" }),
+    oauthEnabled: z
+        .preprocess(parseBoolean, z.boolean())
+        .default(false)
+        .describe("When true, protects the HTTP MCP endpoint with OAuth 2.1 (required for Claude Desktop/web).")
+        .register(configRegistry, { overrideBehavior: "not-allowed" }),
+    oauthAdminPassword: z
+        .string()
+        .optional()
+        .describe("Password that end users must enter on the OAuth authorize page to grant access.")
+        .register(configRegistry, { isSecret: true, overrideBehavior: "not-allowed" }),
+    oauthIssuerUrl: z
+        .string()
+        .optional()
+        .describe("Public HTTPS URL of this server, used as the OAuth issuer (e.g. https://mongodb.example.com).")
+        .register(configRegistry, { overrideBehavior: "not-allowed" }),
+    oauthSessionSecret: z
+        .string()
+        .optional()
+        .describe("Secret used to HMAC-sign the OAuth login session cookie. Should be a random 32+ byte hex string.")
+        .register(configRegistry, { isSecret: true, overrideBehavior: "not-allowed" }),
+    oauthAccessTokenTtlSec: z.coerce
+        .number()
+        .int()
+        .min(60)
+        .default(3600)
+        .describe("Lifetime of issued OAuth access tokens, in seconds.")
+        .register(configRegistry, { overrideBehavior: "not-allowed" }),
+    oauthRefreshTokenTtlSec: z.coerce
+        .number()
+        .int()
+        .min(60)
+        .default(2_592_000)
+        .describe("Lifetime of issued OAuth refresh tokens, in seconds.")
+        .register(configRegistry, { overrideBehavior: "not-allowed" }),
     httpBodyLimit: z.coerce
         .number()
         .int()

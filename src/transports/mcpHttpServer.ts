@@ -1,6 +1,15 @@
 import { type StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
+import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import express from "express";
+import { PasswordGatedAuthProvider } from "./oauth/provider.js";
+import {
+    cookieName as oauthCookieName,
+    createSessionCookie,
+    SESSION_COOKIE_MAX_AGE_MS,
+} from "./oauth/sessionCookie.js";
+import { renderLoginPage } from "./oauth/loginPage.js";
 import { LogId } from "../common/logging/loggingDefinitions.js";
 import { getRandomUUID } from "../helpers/getRandomUUID.js";
 import {
@@ -318,9 +327,76 @@ export class MCPHttpServer<
         });
     }
 
+    private setupOAuth(): express.RequestHandler | undefined {
+        if (!this.userConfig.oauthEnabled) {
+            return undefined;
+        }
+
+        const adminPassword = this.userConfig.oauthAdminPassword;
+        const sessionSecret = this.userConfig.oauthSessionSecret;
+        const issuerUrlRaw = this.userConfig.oauthIssuerUrl;
+
+        if (!adminPassword || !sessionSecret || !issuerUrlRaw) {
+            throw new Error(
+                "oauthEnabled=true requires oauthAdminPassword, oauthSessionSecret, and oauthIssuerUrl to be set."
+            );
+        }
+
+        const issuerUrl = new URL(issuerUrlRaw);
+
+        const provider = new PasswordGatedAuthProvider({
+            adminPassword,
+            sessionSecret,
+            accessTokenTtlSec: this.userConfig.oauthAccessTokenTtlSec,
+            refreshTokenTtlSec: this.userConfig.oauthRefreshTokenTtlSec,
+        });
+        const loginPath = "/oauth/login";
+        this.app.post(
+            loginPath,
+            express.urlencoded({ extended: false }),
+            (req: express.Request, res: express.Response): void => {
+                const body = req.body as { password?: string; next?: string } | undefined;
+                const submitted = body?.password ?? "";
+                const next = typeof body?.next === "string" && body.next.startsWith("/") ? body.next : "/authorize";
+
+                if (submitted !== provider.adminPassword) {
+                    const query = next.includes("?") ? next.slice(next.indexOf("?") + 1) : "";
+                    res.status(401)
+                        .set("Content-Type", "text/html; charset=utf-8")
+                        .send(renderLoginPage({ authorizeQuery: query, error: "Invalid password." }));
+                    return;
+                }
+
+                const cookieValue = createSessionCookie(provider.sessionSecret);
+                const secure = issuerUrl.protocol === "https:";
+                const cookieParts = [
+                    `${oauthCookieName()}=${cookieValue}`,
+                    "HttpOnly",
+                    "SameSite=Lax",
+                    "Path=/",
+                    `Max-Age=${Math.floor(SESSION_COOKIE_MAX_AGE_MS / 1000)}`,
+                ];
+                if (secure) cookieParts.push("Secure");
+                res.setHeader("Set-Cookie", cookieParts.join("; "));
+                res.redirect(302, next);
+            }
+        );
+
+        this.app.use(
+            mcpAuthRouter({
+                provider,
+                issuerUrl,
+                scopesSupported: ["mcp:tools"],
+            })
+        );
+
+        return requireBearerAuth({ verifier: provider });
+    }
+
     // eslint-disable-next-line @typescript-eslint/require-await
     protected override async setupRoutes(): Promise<void> {
         this.setupMiddlewares();
+        const bearerAuth = this.setupOAuth();
         const handleSessionRequest = async (req: express.Request, res: express.Response): Promise<void> => {
             const sessionId = req.headers["mcp-session-id"];
             if (!sessionId) {
@@ -357,8 +433,11 @@ export class MCPHttpServer<
             await transport.handleRequest(req, res, req.body);
         };
 
+        const mcpMiddlewares: express.RequestHandler[] = bearerAuth ? [bearerAuth] : [];
+
         this.app.post(
             "/mcp",
+            ...mcpMiddlewares,
             this.withErrorHandling(async (req: express.Request, res: express.Response) => {
                 const sessionId = req.headers["mcp-session-id"];
                 if (sessionId && typeof sessionId !== "string") {
@@ -399,6 +478,7 @@ export class MCPHttpServer<
 
         this.app.get(
             "/mcp",
+            ...mcpMiddlewares,
             this.withErrorHandling(async (req, res): Promise<void> => {
                 if (this.userConfig.httpResponseType === "sse") {
                     await handleSessionRequest(req, res);
@@ -408,7 +488,7 @@ export class MCPHttpServer<
                 }
             })
         );
-        this.app.delete("/mcp", this.withErrorHandling(handleSessionRequest));
+        this.app.delete("/mcp", ...mcpMiddlewares, this.withErrorHandling(handleSessionRequest));
     }
 
     private withErrorHandling(
