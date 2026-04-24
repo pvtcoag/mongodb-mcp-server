@@ -4,6 +4,8 @@ RUN corepack enable && corepack prepare pnpm@10.23.0 --activate
 
 WORKDIR /build
 
+ENV CI=true
+
 COPY . .
 
 RUN pnpm install --frozen-lockfile --ignore-scripts
