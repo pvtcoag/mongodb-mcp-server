@@ -4,23 +4,11 @@ RUN corepack enable && corepack prepare pnpm@10.23.0 --activate
 
 WORKDIR /build
 
-COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
-COPY packages ./packages
-COPY eslint-rules ./eslint-rules
-COPY tsconfig*.json ./
-COPY api-extractor.json ./
-COPY vite.ui.config.ts ./
-COPY vitest.config.ts ./
-COPY knip.json ./
-COPY eslint.config.js ./
+COPY . .
 
-RUN pnpm install --frozen-lockfile
-
-COPY scripts ./scripts
-COPY resources ./resources
-COPY src ./src
-
-RUN pnpm run build && pnpm prune --prod
+RUN pnpm install --frozen-lockfile --ignore-scripts
+RUN pnpm run build
+RUN pnpm prune --prod --ignore-scripts
 
 FROM node:24-alpine AS runner
 
