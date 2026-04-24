@@ -141,27 +141,6 @@ const ServerConfigSchema = z.object({
             "Header that the HTTP server will validate when making requests (only used when transport is 'http')."
         )
         .register(configRegistry, { overrideBehavior: "not-allowed" }),
-    urlAuthToken: z
-        .string()
-        .optional()
-        .describe(
-            "Secret token required as a URL path segment (e.g. /mcp/<token>). Use this when the MCP client cannot send custom headers. Compared in constant time. Redacted from logs."
-        )
-        .register(configRegistry, { isSecret: true, overrideBehavior: "not-allowed" }),
-    httpAllowedOrigins: z
-        .preprocess((val: string | string[] | undefined) => commaSeparatedToArray(val), z.array(z.string()))
-        .default([])
-        .describe(
-            "CORS allowed origins for browser-based MCP clients. Empty array disables CORS (recommended for non-browser clients). Use 'https://claude.ai' for Claude web."
-        )
-        .register(configRegistry, { overrideBehavior: "not-allowed" }),
-    httpRateLimitPerMinute: z.coerce
-        .number()
-        .int()
-        .min(0, "httpRateLimitPerMinute must be non-negative")
-        .default(0)
-        .describe("Max requests per minute per client IP (0 = disabled). Applies to all /mcp routes.")
-        .register(configRegistry, { overrideBehavior: "not-allowed" }),
     httpBodyLimit: z.coerce
         .number()
         .int()
