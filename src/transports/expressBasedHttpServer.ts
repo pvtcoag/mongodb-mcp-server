@@ -20,7 +20,10 @@ export abstract class ExpressBasedHttpServer {
 
     constructor(config: { logger: LoggerBase; logContext: string } & ExpressConfig) {
         this.app = express();
-        this.app.enable("trust proxy"); // needed for reverse proxy support
+        // Trust exactly one proxy hop (Railway/Cloudflare edge). `enable("trust proxy")`
+        // is equivalent to `true`, which lets any caller spoof X-Forwarded-For and bypass
+        // the SDK's per-IP rate limiting on /authorize, /token, /register.
+        this.app.set("trust proxy", 1);
         this.expressConfig = { port: config.port, hostname: config.hostname };
 
         this.logger = config.logger;
