@@ -172,7 +172,7 @@ const ServerConfigSchema = z.object({
         .number()
         .int()
         .min(60)
-        .default(7_776_000)
+        .default(2_592_000)
         .describe("Sliding lifetime of issued OAuth refresh tokens, in seconds. Resets on each use.")
         .register(configRegistry, { overrideBehavior: "not-allowed" }),
     oauthRefreshTokenAbsoluteTtlSec: z.coerce
