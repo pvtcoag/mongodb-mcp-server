@@ -10,6 +10,7 @@ import {
     SESSION_COOKIE_MAX_AGE_MS,
 } from "./oauth/sessionCookie.js";
 import { renderLoginPage } from "./oauth/loginPage.js";
+import { parseEncryptionKey } from "./oauth/encryptedStore.js";
 import { LogId } from "../common/logging/loggingDefinitions.js";
 import { getRandomUUID } from "../helpers/getRandomUUID.js";
 import {
@@ -327,7 +328,7 @@ export class MCPHttpServer<
         });
     }
 
-    private setupOAuth(): express.RequestHandler | undefined {
+    private async setupOAuth(): Promise<express.RequestHandler | undefined> {
         if (!this.userConfig.oauthEnabled) {
             return undefined;
         }
@@ -344,12 +345,25 @@ export class MCPHttpServer<
 
         const issuerUrl = new URL(issuerUrlRaw);
 
+        const tokensFile = this.userConfig.oauthTokensFile;
+        const encryptionKeyHex = this.userConfig.oauthEncryptionKey;
+        const storage = tokensFile
+            ? {
+                  filePath: tokensFile,
+                  encryptionKey: encryptionKeyHex ? parseEncryptionKey(encryptionKeyHex) : undefined,
+              }
+            : undefined;
+
         const provider = new PasswordGatedAuthProvider({
             adminPassword,
             sessionSecret,
             accessTokenTtlSec: this.userConfig.oauthAccessTokenTtlSec,
             refreshTokenTtlSec: this.userConfig.oauthRefreshTokenTtlSec,
+            refreshTokenAbsoluteTtlSec: this.userConfig.oauthRefreshTokenAbsoluteTtlSec,
+            logger: this.logger,
+            storage,
         });
+        await provider.initialize();
         const loginPath = "/oauth/login";
         this.app.post(
             loginPath,
@@ -400,10 +414,9 @@ export class MCPHttpServer<
         return requireBearerAuth({ verifier: provider, resourceMetadataUrl });
     }
 
-    // eslint-disable-next-line @typescript-eslint/require-await
     protected override async setupRoutes(): Promise<void> {
         this.setupMiddlewares();
-        const bearerAuth = this.setupOAuth();
+        const bearerAuth = await this.setupOAuth();
         const handleSessionRequest = async (req: express.Request, res: express.Response): Promise<void> => {
             const sessionId = req.headers["mcp-session-id"];
             if (!sessionId) {

@@ -172,9 +172,32 @@ const ServerConfigSchema = z.object({
         .number()
         .int()
         .min(60)
-        .default(2_592_000)
-        .describe("Lifetime of issued OAuth refresh tokens, in seconds.")
+        .default(7_776_000)
+        .describe("Sliding lifetime of issued OAuth refresh tokens, in seconds. Resets on each use.")
         .register(configRegistry, { overrideBehavior: "not-allowed" }),
+    oauthRefreshTokenAbsoluteTtlSec: z.coerce
+        .number()
+        .int()
+        .min(60)
+        .default(15_552_000)
+        .describe(
+            "Absolute lifetime cap for an OAuth refresh-token family, measured from the original authorization, in seconds. Default 180 days."
+        )
+        .register(configRegistry, { overrideBehavior: "not-allowed" }),
+    oauthTokensFile: z
+        .string()
+        .optional()
+        .describe(
+            "Filesystem path where OAuth state (clients, tokens, refresh tokens, families) is persisted. Required for state to survive restarts."
+        )
+        .register(configRegistry, { overrideBehavior: "not-allowed" }),
+    oauthEncryptionKey: z
+        .string()
+        .optional()
+        .describe(
+            "32-byte hex-encoded key used to AES-256-GCM encrypt the OAuth tokens file at rest. Generate with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""
+        )
+        .register(configRegistry, { isSecret: true, overrideBehavior: "not-allowed" }),
     httpBodyLimit: z.coerce
         .number()
         .int()
