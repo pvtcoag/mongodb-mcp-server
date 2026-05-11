@@ -3,6 +3,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import express from "express";
+import { timingSafeEqual } from "node:crypto";
 import { PasswordGatedAuthProvider } from "./oauth/provider.js";
 import {
     cookieName as oauthCookieName,
@@ -57,6 +58,8 @@ export class MCPHttpServer<
     protected readonly userConfig: TUserConfig;
     private readonly metrics: Metrics<DefaultMetrics>;
     private readonly pendingInitializations = new Map<string, Promise<void>>();
+    private oauthProvider?: PasswordGatedAuthProvider;
+    private readonly oauthCleanups: Array<() => void> = [];
 
     private createServerForRequest: (createParams: {
         request: TransportRequestContext;
@@ -88,7 +91,16 @@ export class MCPHttpServer<
     }
 
     public async stop(): Promise<void> {
-        await Promise.all([this.sessionStore.closeAllSessions(), super.stop()]);
+        for (const cleanup of this.oauthCleanups.splice(0)) {
+            try {
+                cleanup();
+            } catch {
+                // best-effort
+            }
+        }
+        const oauthShutdown = this.oauthProvider ? this.oauthProvider.shutdown() : Promise.resolve();
+        this.oauthProvider = undefined;
+        await Promise.all([this.sessionStore.closeAllSessions(), super.stop(), oauthShutdown]);
     }
 
     private reportSessionError(res: express.Response, errorCode: number): void {
@@ -364,16 +376,89 @@ export class MCPHttpServer<
             storage,
         });
         await provider.initialize();
+        provider.start();
+        this.oauthProvider = provider;
+
+        // Constant-time string comparison so a timing attack can't probe the
+        // admin password byte-by-byte.
+        const ctEquals = (a: string, b: string): boolean => {
+            const ab = Buffer.from(a, "utf8");
+            const bb = Buffer.from(b, "utf8");
+            if (ab.length !== bb.length) return false;
+            return timingSafeEqual(ab, bb);
+        };
+
+        // Lightweight in-memory rate limiter: max attempts per IP in a window.
+        // The SDK already rate-limits /authorize, /token, /register; this
+        // protects our custom password POST against brute-force.
+        const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+        const LOGIN_MAX_ATTEMPTS = 10;
+        const loginAttempts = new Map<string, { count: number; resetAt: number }>();
+        const loginRateLimit = (req: express.Request): { allowed: boolean; retryAfter: number } => {
+            const ip = req.ip ?? "unknown";
+            const now = Date.now();
+            const entry = loginAttempts.get(ip);
+            if (!entry || entry.resetAt < now) {
+                loginAttempts.set(ip, { count: 1, resetAt: now + LOGIN_WINDOW_MS });
+                return { allowed: true, retryAfter: 0 };
+            }
+            entry.count += 1;
+            if (entry.count > LOGIN_MAX_ATTEMPTS) {
+                return { allowed: false, retryAfter: Math.ceil((entry.resetAt - now) / 1000) };
+            }
+            return { allowed: true, retryAfter: 0 };
+        };
+        // Periodically prune the rate-limit map so it doesn't grow forever.
+        const limitGc = setInterval(() => {
+            const now = Date.now();
+            for (const [ip, e] of loginAttempts) {
+                if (e.resetAt < now) loginAttempts.delete(ip);
+            }
+        }, LOGIN_WINDOW_MS).unref();
+        this.oauthCleanups.push(() => clearInterval(limitGc));
+
         const loginPath = "/oauth/login";
         this.app.post(
             loginPath,
             express.urlencoded({ extended: false }),
             (req: express.Request, res: express.Response): void => {
+                // CSRF defense: only accept POSTs whose Origin/Referer is our own
+                // issuer. SameSite=Lax already mostly covers this; the explicit
+                // check stops a misconfigured browser or a same-site sub-domain
+                // from submitting cross-origin.
+                const origin = req.headers.origin;
+                const referer = req.headers.referer;
+                const isSameOrigin = (value: string | undefined): boolean => {
+                    if (!value) return false;
+                    try {
+                        const u = new URL(value);
+                        return u.origin === issuerUrl.origin;
+                    } catch {
+                        return false;
+                    }
+                };
+                if (!isSameOrigin(origin) && !isSameOrigin(referer)) {
+                    res.status(403).type("text/plain").send("Cross-origin login denied.");
+                    return;
+                }
+
+                const limit = loginRateLimit(req);
+                if (!limit.allowed) {
+                    res.status(429)
+                        .set("Retry-After", String(limit.retryAfter))
+                        .type("text/plain")
+                        .send("Too many login attempts. Try again later.");
+                    return;
+                }
+
                 const body = req.body as { password?: string; next?: string } | undefined;
                 const submitted = body?.password ?? "";
-                const next = typeof body?.next === "string" && body.next.startsWith("/") ? body.next : "/authorize";
+                // Strictly require `next` to be a /authorize?... path so the form
+                // can't be repurposed as an open redirect to an unrelated route.
+                const rawNext = typeof body?.next === "string" ? body.next : "";
+                const next = rawNext.startsWith("/authorize?") ? rawNext : "/authorize";
 
-                if (submitted !== provider.adminPassword) {
+                if (!ctEquals(submitted, provider.adminPassword)) {
                     const query = next.includes("?") ? next.slice(next.indexOf("?") + 1) : "";
                     res.status(401)
                         .set("Content-Type", "text/html; charset=utf-8")

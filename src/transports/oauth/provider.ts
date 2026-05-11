@@ -16,6 +16,26 @@ import { cookieName, verifySessionCookie } from "./sessionCookie.js";
 import { EncryptedFileStore, type EncryptionKey } from "./encryptedStore.js";
 
 const AUTHORIZATION_CODE_TTL_MS = 10 * 60 * 1000;
+/**
+ * After a refresh token is consumed, we keep it in the consumed-set for this
+ * long so we can still detect replays. Reads should choose a value much
+ * larger than any realistic legitimate-retry window but bounded so the file
+ * stays small. 24h is enough to catch any practical replay-from-stolen-token
+ * attack (the access token already expired hours earlier).
+ */
+const CONSUMED_RT_RETENTION_MS = 24 * 60 * 60 * 1000;
+/**
+ * A refresh-token request can race itself when a client retries the network
+ * call or two parts of the client code refresh concurrently. If a "replay"
+ * arrives within this window of the original consume, treat it as a benign
+ * duplicate (return an error, do NOT revoke the family). Outside this window,
+ * a replay is the real attacker scenario and we revoke the family.
+ *
+ * 30s comfortably covers retry timeouts (typical 1–10s) without giving an
+ * attacker a meaningful window to abuse a stolen token.
+ */
+const RT_REPLAY_GRACE_MS = 30 * 1000;
+const GC_INTERVAL_MS = 60 * 1000;
 const LOG_CTX = "oauthProvider";
 
 type StoredCode = {
@@ -199,9 +219,19 @@ export class PasswordGatedAuthProvider implements OAuthServerProvider {
     private readonly store?: EncryptedFileStore<PersistedState>;
     private persistChain: Promise<void> = Promise.resolve();
     private migrateOnNextWrite = false;
+    private gcTimer?: NodeJS.Timeout;
 
     constructor(private readonly options: PasswordGatedAuthProviderOptions) {
         this.logger = options.logger;
+        if (!options.adminPassword || options.adminPassword.length < 8) {
+            throw new Error("oauthAdminPassword must be at least 8 characters");
+        }
+        if (!options.sessionSecret || options.sessionSecret.length < 32) {
+            throw new Error(
+                "oauthSessionSecret must be at least 32 characters (recommended: 64-char hex from " +
+                    "`node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\"`)"
+            );
+        }
         if (options.storage) {
             this.store = new EncryptedFileStore<PersistedState>({
                 filePath: options.storage.filePath,
@@ -266,6 +296,9 @@ export class PasswordGatedAuthProvider implements OAuthServerProvider {
                     message: "OAuth state file is plaintext but an encryption key is configured; will encrypt on next write.",
                 });
             }
+
+            // One-shot startup sweep: anything already expired on disk should be dropped.
+            this.runGc();
         } catch (err) {
             this.logger.error({
                 id: LogId.oauthStorageLoadFailed,
@@ -282,6 +315,88 @@ export class PasswordGatedAuthProvider implements OAuthServerProvider {
 
     get sessionSecret(): string {
         return this.options.sessionSecret;
+    }
+
+    /** Starts the periodic garbage-collection sweep. Idempotent. */
+    start(): void {
+        if (this.gcTimer) return;
+        this.gcTimer = setInterval(() => this.runGc(), GC_INTERVAL_MS);
+        // Don't keep the event loop alive solely for this timer.
+        if (typeof this.gcTimer.unref === "function") this.gcTimer.unref();
+    }
+
+    /** Stops the GC interval. Safe to call multiple times. */
+    async shutdown(): Promise<void> {
+        if (this.gcTimer) {
+            clearInterval(this.gcTimer);
+            this.gcTimer = undefined;
+        }
+        // Wait for any in-flight save to flush before returning.
+        await this.persistChain;
+    }
+
+    /**
+     * Sweeps expired/aged-out state.
+     *  - Auth codes:                  drop if expiresAt < now
+     *  - Access tokens:               drop if expiresAt < now OR family revoked
+     *  - Refresh tokens:              drop if expiresAt < now OR family revoked
+     *  - Consumed refresh tokens:     drop after CONSUMED_RT_RETENTION_MS
+     *  - Families:                    drop revoked families older than the
+     *                                 retention window with no consumed RTs
+     *
+     * Persists if anything changed.
+     */
+    private runGc(): void {
+        const now = Date.now();
+        let changed = false;
+
+        for (const [k, v] of this.codes) {
+            if (v.expiresAt < now) {
+                this.codes.delete(k);
+                changed = true;
+            }
+        }
+        for (const [k, v] of this.accessTokens) {
+            const fam = this.families.get(v.familyId);
+            if (v.expiresAt < now || !fam || fam.revoked) {
+                this.accessTokens.delete(k);
+                changed = true;
+            }
+        }
+        for (const [k, v] of this.refreshTokens) {
+            const fam = this.families.get(v.familyId);
+            if (v.expiresAt < now || !fam || fam.revoked) {
+                this.refreshTokens.delete(k);
+                changed = true;
+            }
+        }
+        for (const [k, v] of this.consumedRefreshTokens) {
+            if (now - v.consumedAt > CONSUMED_RT_RETENTION_MS) {
+                this.consumedRefreshTokens.delete(k);
+                changed = true;
+            }
+        }
+
+        // Compute which families still have any reference.
+        const referencedFamilies = new Set<string>();
+        for (const v of this.accessTokens.values()) referencedFamilies.add(v.familyId);
+        for (const v of this.refreshTokens.values()) referencedFamilies.add(v.familyId);
+        for (const v of this.consumedRefreshTokens.values()) referencedFamilies.add(v.familyId);
+
+        for (const [k, fam] of this.families) {
+            if (referencedFamilies.has(k)) continue;
+            // Keep non-revoked families inside their absolute cap window so that
+            // any straggling tokens we missed can still be validated. Drop them
+            // once they're past the absolute cap (the family is dead anyway).
+            const past = now - fam.originalIssuedAt;
+            const beyondCap = past > this.options.refreshTokenAbsoluteTtlSec * 1000;
+            if (fam.revoked || beyondCap) {
+                this.families.delete(k);
+                changed = true;
+            }
+        }
+
+        if (changed) void this.scheduleSave();
     }
 
     async authorize(
@@ -402,9 +517,30 @@ export class PasswordGatedAuthProvider implements OAuthServerProvider {
         scopes?: string[],
         resource?: URL
     ): Promise<OAuthTokens> {
-        // Replay detection: if this RT was already consumed, nuke the family.
+        // Replay detection: if this RT was already consumed, decide whether
+        // it's a benign concurrent retry (grace window) or a real attacker
+        // scenario (revoke the family).
         const consumed = this.consumedRefreshTokens.get(refreshToken);
         if (consumed) {
+            const consumedFamily = this.families.get(consumed.familyId);
+            const ageMs = Date.now() - consumed.consumedAt;
+            const sameClient = consumedFamily?.clientId === client.client_id;
+
+            if (ageMs <= RT_REPLAY_GRACE_MS && sameClient && consumedFamily && !consumedFamily.revoked) {
+                // Benign duplicate — same client, very recent, family still alive.
+                // Refuse the duplicate but DO NOT revoke. The first request's
+                // response is already on its way back to the client.
+                this.logger.debug({
+                    id: LogId.oauthRefreshReplayDetected,
+                    context: LOG_CTX,
+                    message:
+                        `Concurrent refresh of consumed RT for family ${consumed.familyId} ` +
+                        `(${ageMs}ms after consume) — treating as benign duplicate.`,
+                    attributes: { client_id: client.client_id, family_id: consumed.familyId },
+                });
+                throw new InvalidRequestError("Refresh token has already been used");
+            }
+
             this.logger.warning({
                 id: LogId.oauthRefreshReplayDetected,
                 context: LOG_CTX,
