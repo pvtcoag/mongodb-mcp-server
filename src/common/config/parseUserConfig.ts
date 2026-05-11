@@ -177,6 +177,9 @@ function registerKnownSecretsInRootKeychain(userConfig: Partial<UserConfig>): vo
     maybeRegister(userConfig.username, "user");
     maybeRegister(userConfig.voyageApiKey, "password");
     maybeRegister(userConfig.connectionString, "mongodb uri");
+    maybeRegister(userConfig.oauthAdminPassword, "password");
+    maybeRegister(userConfig.oauthSessionSecret, "password");
+    maybeRegister(userConfig.oauthEncryptionKey, "password");
 }
 
 function matchingConfigKey(key: string): string | undefined {

@@ -8,6 +8,8 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # Skip on forks — publishes to upstream's npm package and needs upstream secrets.
+    if: github.repository == 'mongodb-js/mongodb-mcp-server'
     permissions: {}
     outputs:
       VERSION_EXISTS: ${{ steps.check-version.outputs.VERSION_EXISTS }}

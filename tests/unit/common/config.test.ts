@@ -56,6 +56,10 @@ const expectedDefaults = {
     externallyManagedSessions: false,
     httpResponseType: "sse",
     monitoringServerFeatures: ["health-check"],
+    oauthEnabled: false,
+    oauthAccessTokenTtlSec: 60 * 60, // 1 hour
+    oauthRefreshTokenTtlSec: 30 * 24 * 60 * 60, // 30 days
+    oauthRefreshTokenAbsoluteTtlSec: 180 * 24 * 60 * 60, // 180 days
 };
 
 const CONFIG_FIXTURES = {

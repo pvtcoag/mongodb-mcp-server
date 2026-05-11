@@ -12,7 +12,7 @@ permissions:
 jobs:
   run-tests:
     name: Run MongoDB tests
-    if: github.event_name == 'push' || (github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository)
+    if: github.repository == 'mongodb-js/mongodb-mcp-server' && (github.event_name == 'push' || (github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository))
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
@@ -52,7 +52,7 @@ jobs:
 
   run-atlas-tests:
     name: Run Atlas tests
-    if: github.event_name == 'push' || (github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository)
+    if: github.repository == 'mongodb-js/mongodb-mcp-server' && (github.event_name == 'push' || (github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: ubuntu-latest
     steps:
       - uses: GitHubSecurityLab/actions-permissions/monitor@v1
@@ -81,7 +81,7 @@ jobs:
 
   run-atlas-local-tests:
     name: Run Atlas Local tests
-    if: github.event_name == 'push' || (github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository)
+    if: github.repository == 'mongodb-js/mongodb-mcp-server' && (github.event_name == 'push' || (github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: ubuntu-latest
     steps:
       - uses: GitHubSecurityLab/actions-permissions/monitor@v1
@@ -138,7 +138,7 @@ jobs:
 
   coverage:
     name: Report Coverage
-    if: github.event_name == 'push' || (github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository)
+    if: github.repository == 'mongodb-js/mongodb-mcp-server' && (github.event_name == 'push' || (github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: ubuntu-latest
     needs:
       [run-tests, run-atlas-tests, run-atlas-local-tests, run-browser-tests]
@@ -183,7 +183,7 @@ jobs:
 
   run-git-secrets:
     name: Run git secrets
-    if: github.event_name == 'push' || (github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository)
+    if: github.repository == 'mongodb-js/mongodb-mcp-server' && (github.event_name == 'push' || (github.event.pull_request.user.login != 'dependabot[bot]' && github.event.pull_request.head.repo.full_name == github.repository))
     runs-on: ubuntu-latest
     steps:
       - uses: GitHubSecurityLab/actions-permissions/monitor@v1

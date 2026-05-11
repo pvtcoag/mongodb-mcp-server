@@ -1170,6 +1170,15 @@ export const UserConfigSchema: z.ZodObject<{
     httpPort: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
     httpHost: z.ZodDefault<z.ZodString>;
     httpHeaders: z.ZodDefault<z.ZodObject<{}, z.core.$loose>>;
+    oauthEnabled: z.ZodDefault<z.ZodPreprocess<z.ZodBoolean>>;
+    oauthAdminPassword: z.ZodOptional<z.ZodString>;
+    oauthIssuerUrl: z.ZodOptional<z.ZodString>;
+    oauthSessionSecret: z.ZodOptional<z.ZodString>;
+    oauthAccessTokenTtlSec: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
+    oauthRefreshTokenTtlSec: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
+    oauthRefreshTokenAbsoluteTtlSec: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
+    oauthTokensFile: z.ZodOptional<z.ZodString>;
+    oauthEncryptionKey: z.ZodOptional<z.ZodString>;
     httpBodyLimit: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
     idleTimeoutMs: z.ZodDefault<z.ZodCoercedNumber<unknown>>;
     notificationTimeoutMs: z.ZodDefault<z.ZodCoercedNumber<unknown>>;

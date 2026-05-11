@@ -16,7 +16,8 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'accuracy-tests')
+    # Skip on forks — needs upstream LLM API + Atlas secrets.
+    if: github.repository == 'mongodb-js/mongodb-mcp-server' && (github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'accuracy-tests'))
     env:
       MDB_OPEN_AI_API_KEY: ${{ secrets.ACCURACY_OPEN_AI_API_KEY }}
       MDB_GEMINI_API_KEY: ${{ secrets.ACCURACY_GEMINI_API_KEY }}

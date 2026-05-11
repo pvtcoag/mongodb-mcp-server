@@ -7,14 +7,9 @@ function escapeHtml(value: string): string {
         .replace(/'/g, "&#39;");
 }
 
-export function renderLoginPage(options: {
-    authorizeQuery: string;
-    error?: string;
-}): string {
+export function renderLoginPage(options: { authorizeQuery: string; error?: string }): string {
     const nextPath = `/authorize?${options.authorizeQuery}`;
-    const errorHtml = options.error
-        ? `<p class="error">${escapeHtml(options.error)}</p>`
-        : "";
+    const errorHtml = options.error ? `<p class="error">${escapeHtml(options.error)}</p>` : "";
     return `<!doctype html>
 <html lang="en">
 <head>

@@ -21,8 +21,7 @@ export function verifySessionCookie(raw: string | undefined, secret: string): bo
     if (!raw) return false;
     const parts = raw.split(".");
     if (parts.length !== 2) return false;
-    const issuedAt = parts[0]!;
-    const sig = parts[1]!;
+    const [issuedAt, sig] = parts as [string, string];
     const issuedAtMs = Number(issuedAt);
     if (!Number.isFinite(issuedAtMs)) return false;
     if (Date.now() - issuedAtMs > COOKIE_MAX_AGE_MS) return false;

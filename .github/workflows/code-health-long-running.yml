@@ -12,6 +12,8 @@ jobs:
   run-long-running-tests:
     name: Run long running tests
     runs-on: ubuntu-latest
+    # Skip on forks — needs Atlas test cluster credentials.
+    if: github.repository == 'mongodb-js/mongodb-mcp-server'
     steps:
       - uses: GitHubSecurityLab/actions-permissions/monitor@v1
       - uses: actions/checkout@v6

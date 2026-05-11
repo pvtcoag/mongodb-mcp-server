@@ -241,7 +241,9 @@ export class PasswordGatedAuthProvider implements OAuthServerProvider {
         }
         this.clientsStore = new InMemoryClientsStore(
             this.clients,
-            () => this.scheduleSave(),
+            () => {
+                void this.scheduleSave();
+            },
             (client) => {
                 this.logger.info({
                     id: LogId.oauthClientRegistered,
@@ -275,8 +277,7 @@ export class PasswordGatedAuthProvider implements OAuthServerProvider {
             for (const [k, v] of Object.entries(state.families)) this.families.set(k, v);
             for (const [k, v] of Object.entries(state.accessTokens)) this.accessTokens.set(k, v);
             for (const [k, v] of Object.entries(state.refreshTokens)) this.refreshTokens.set(k, v);
-            for (const [k, v] of Object.entries(state.consumedRefreshTokens))
-                this.consumedRefreshTokens.set(k, v);
+            for (const [k, v] of Object.entries(state.consumedRefreshTokens)) this.consumedRefreshTokens.set(k, v);
 
             this.logger.info({
                 id: LogId.oauthStorageLoaded,
@@ -293,7 +294,8 @@ export class PasswordGatedAuthProvider implements OAuthServerProvider {
                 this.logger.notice({
                     id: LogId.oauthStorageMigratedToEncrypted,
                     context: LOG_CTX,
-                    message: "OAuth state file is plaintext but an encryption key is configured; will encrypt on next write.",
+                    message:
+                        "OAuth state file is plaintext but an encryption key is configured; will encrypt on next write.",
                 });
             }
 
@@ -399,11 +401,8 @@ export class PasswordGatedAuthProvider implements OAuthServerProvider {
         if (changed) void this.scheduleSave();
     }
 
-    async authorize(
-        client: OAuthClientInformationFull,
-        params: AuthorizationParams,
-        res: Response
-    ): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/require-await
+    async authorize(client: OAuthClientInformationFull, params: AuthorizationParams, res: Response): Promise<void> {
         if (!client.redirect_uris.includes(params.redirectUri)) {
             throw new InvalidRequestError("Unregistered redirect_uri");
         }
@@ -429,9 +428,9 @@ export class PasswordGatedAuthProvider implements OAuthServerProvider {
             if (params.scopes?.length) query.set("scope", params.scopes.join(" "));
             if (params.resource) query.set("resource", params.resource.toString());
 
-            res.status(200).set("Content-Type", "text/html; charset=utf-8").send(
-                renderLoginPage({ authorizeQuery: query.toString() })
-            );
+            res.status(200)
+                .set("Content-Type", "text/html; charset=utf-8")
+                .send(renderLoginPage({ authorizeQuery: query.toString() }));
             return;
         }
 
@@ -455,6 +454,7 @@ export class PasswordGatedAuthProvider implements OAuthServerProvider {
         res.redirect(target.toString());
     }
 
+    // eslint-disable-next-line @typescript-eslint/require-await
     async challengeForAuthorizationCode(
         _client: OAuthClientInformationFull,
         authorizationCode: string
@@ -468,10 +468,7 @@ export class PasswordGatedAuthProvider implements OAuthServerProvider {
 
     async exchangeAuthorizationCode(
         client: OAuthClientInformationFull,
-        authorizationCode: string,
-        _codeVerifier?: string,
-        _redirectUri?: string,
-        _resource?: URL
+        authorizationCode: string
     ): Promise<OAuthTokens> {
         const stored = this.codes.get(authorizationCode);
         if (!stored) {
@@ -628,6 +625,7 @@ export class PasswordGatedAuthProvider implements OAuthServerProvider {
         return tokens;
     }
 
+    // eslint-disable-next-line @typescript-eslint/require-await
     async verifyAccessToken(token: string): Promise<AuthInfo> {
         const stored = this.accessTokens.get(token);
         if (!stored) {
@@ -686,12 +684,7 @@ export class PasswordGatedAuthProvider implements OAuthServerProvider {
         // Per RFC 7009 §2.2: revocation of an invalid token is a no-op success.
     }
 
-    private issueTokens(
-        familyId: string,
-        clientId: string,
-        scopes: string[],
-        resource?: string
-    ): OAuthTokens {
+    private issueTokens(familyId: string, clientId: string, scopes: string[], resource?: string): OAuthTokens {
         const accessToken = randomBytes(32).toString("hex");
         const refreshToken = randomBytes(32).toString("hex");
         const now = Date.now();
@@ -748,7 +741,8 @@ export class PasswordGatedAuthProvider implements OAuthServerProvider {
      * Serializes saves so concurrent mutations never race the file.
      */
     private scheduleSave(): Promise<void> {
-        if (!this.store) return Promise.resolve();
+        const store = this.store;
+        if (!store) return Promise.resolve();
         const next = this.persistChain.then(async () => {
             try {
                 const state: PersistedState = {
@@ -759,7 +753,7 @@ export class PasswordGatedAuthProvider implements OAuthServerProvider {
                     refreshTokens: Object.fromEntries(this.refreshTokens),
                     consumedRefreshTokens: Object.fromEntries(this.consumedRefreshTokens),
                 };
-                await this.store!.save(state);
+                await store.save(state);
                 if (this.migrateOnNextWrite) {
                     this.migrateOnNextWrite = false;
                     this.logger.notice({

@@ -58,9 +58,7 @@ export function decrypt(envelope: EncryptedEnvelope, key: EncryptionKey): string
     return Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
 }
 
-export type LoadResult<T> =
-    | { state: "missing" }
-    | { state: "loaded"; value: T; wasEncrypted: boolean };
+export type LoadResult<T> = { state: "missing" } | { state: "loaded"; value: T; wasEncrypted: boolean };
 
 export type StoreOptions<T> = {
     filePath: string;
@@ -89,7 +87,7 @@ export class EncryptedFileStore<T> {
         try {
             parsed = JSON.parse(raw);
         } catch (err) {
-            throw new Error(`OAuth state file is not valid JSON: ${(err as Error).message}`);
+            throw new Error(`OAuth state file is not valid JSON: ${(err as Error).message}`, { cause: err });
         }
 
         // Detect encrypted envelope
@@ -99,7 +97,7 @@ export class EncryptedFileStore<T> {
                     "OAuth state file is encrypted but no MDB_MCP_OAUTH_ENCRYPTION_KEY is configured. Refusing to start."
                 );
             }
-            const plaintext = decrypt(parsed as EncryptedEnvelope, this.opts.encryptionKey);
+            const plaintext = decrypt(parsed, this.opts.encryptionKey);
             const inner = JSON.parse(plaintext) as unknown;
             const value = this.opts.validate(inner);
             return { state: "loaded", value, wasEncrypted: true };
@@ -119,9 +117,7 @@ export class EncryptedFileStore<T> {
         await fs.mkdir(dir, { recursive: true });
 
         const json = JSON.stringify(value);
-        const payload = this.opts.encryptionKey
-            ? JSON.stringify(encrypt(json, this.opts.encryptionKey))
-            : json;
+        const payload = this.opts.encryptionKey ? JSON.stringify(encrypt(json, this.opts.encryptionKey)) : json;
 
         const tmp = `${this.opts.filePath}.tmp.${process.pid}.${randomBytes(6).toString("hex")}`;
         const fh = await fs.open(tmp, "w", 0o600);

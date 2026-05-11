@@ -467,12 +467,12 @@ export class CreateIndexTool extends MongoDBToolBase {
                         boolean: "boolean";
                         date: "date";
                         uuid: "uuid";
+                        token: "token";
                         autocomplete: "autocomplete";
                         document: "document";
                         embeddedDocuments: "embeddedDocuments";
                         geo: "geo";
                         objectId: "objectId";
-                        token: "token";
                     }>;
                 }, z.core.$loose>>>;
             }, z.core.$strip>;
